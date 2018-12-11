@@ -130,9 +130,123 @@ class ShotDetection():
         return CandidateSegment
 
 
+    def CTDetectionBaseOnHist(self, CandidateSegments, Truth):
+        import numpy as np
+        import cv2
+
+        k = 0.4
+        Tc = 0.05
+
+        CandidateSegments = CandidateSegments
+
+        HardCutTruth = Truth
+
+        # It save the predicted shot boundaries
+        Answer = []
+
+        # It save the False Cut
+        FalseCut = []
+        
+        # It save the Missed Cut1(Because the peak is too small)
+        MissedCut1 = []
+        # It save the Missed Cut2(Because the difference of first frame and the last frame in a segment is too small)
+        MissedCut2 = []
+
+        i_Video = cv2.VideoCapture(self.Video_path)
+
+        # get width of this video
+        wid = int(i_Video.get(3))
+
+        # get height of this video
+        hei = int(i_Video.get(4))
+        AnswerLength = 0
+
+        for i in range(len(CandidateSegments)):
+
+            i_Video.set(1, CandidateSegments[i][0])
+            ret1, frame1 = i_Video.read()
+
+            i_Video.set(1, CandidateSegments[i][1])
+            ret1, frame2 = i_Video.read()
+            HistDifference = []
+
+
+            if self.getHist(frame1, frame2, wid*hei)>0.5:
+                for j in range(CandidateSegments[i][0], CandidateSegments[i][1]):
+
+                    i_Video.set(1, j)
+                    ret1_, frame1_ = i_Video.read()
+
+                    i_Video.set(1, j+1)
+                    ret2_, frame2_ = i_Video.read()
+
+                    HistDifference.append(self.getHist_chi_square(frame1_, frame2_, wid*hei))
+
+
+                if np.max(HistDifference) > 0.1 and len([_ for _ in HistDifference if _>0.1])<len(HistDifference):
+                    CandidatePeak = -1
+                    MAXValue = -1
+
+                    if HistDifference[0] > 0.1 and HistDifference[0] > HistDifference[1]:
+                        CandidatePeak = 0
+                        MAXValue = HistDifference[0] - HistDifference[1]
+
+                    for ii in range(1,len(HistDifference)-1):
+                        if HistDifference[ii]>0.1 and HistDifference[ii] > HistDifference[ii-1] and HistDifference[ii] > HistDifference[ii+1]:
+                            if np.max([np.abs(HistDifference[ii]-HistDifference[ii-1]), np.abs(HistDifference[ii]-HistDifference[ii+1])])>MAXValue:
+                                CandidatePeak = ii
+                                MAXValue = np.max([np.abs(HistDifference[ii]-HistDifference[ii-1]), np.abs(HistDifference[ii]-HistDifference[ii+1])])
+
+                    if HistDifference[-1] > 0.1 and HistDifference[-1] > HistDifference[-2] and (HistDifference[-1]-HistDifference[-2])>MAXValue:
+                        CandidatePeak = len(HistDifference)-1
+                        MAXValue = HistDifference[-1]-HistDifference[-2]
+                    if MAXValue>-1:
+                        Answer.append(([CandidateSegments[i][0]+CandidatePeak, CandidateSegments[i][0]+CandidatePeak+1]))
+
+
+                if len(Answer) > 0 and len(Answer) > AnswerLength:
+                    AnswerLength += 1
+                    if Answer[-1] not in HardCutTruth:
+                        FalseCut.append[Answer[-1]]
+                    # Flag = False
+                    # for k in HardCutTruth:
+                    #     Flag = self.if_overlap(Answer[-1][0], Answer[-1][1], k[0], k[1])
+                    #     if Flag:
+                    #         break
+                    # if Flag is False:
+                    #     print 'This is a false cut: ', Answer[-1]
+                else:
+                    for k1 in HardCutTruth:
+                        if self.if_overlap(CandidateSegments[i][0], CandidateSegments[i][1], k1[0], k1[1]):
+                            MissedCut1.append[k1]
+
+            else:
+                for k2 in HardCutTruth:
+                    if self.if_overlap(CandidateSegments[i][0], CandidateSegments[i][1], k2[0], k2[1]):
+                        MissedCut2.append[k2]
+        Miss = 0
+        True_ = 0
+        False_ = 0
+        for i in Answer:
+            if i not in HardCutTruth:
+                print 'False :', i, '\n'
+                False_ = False_ + 1
+            else:
+                True_ = True_ + 1
+
+        for i in HardCutTruth:
+            if i not in Answer:
+                Miss = Miss + 1
+
+        print 'False No. is', False_,'\n'
+        print 'True No. is', True_, '\n'
+        print 'Miss No. is', Miss, '\n'
+
 
 # Change the annotation of ClipShots to the annotation of Dataset
 if __name__ == '__main__':
+    import math
+
     os.chdir('D:\\ClipShots\\ClipShots\\ClipShots\\annotations')
     annotations = json.load(open('./train.json'))
     os.chdir('D:\\ClipShots\\ClipShots\\ClipShots\\converted_annotations_test')
@@ -141,10 +255,6 @@ if __name__ == '__main__':
 
     test1 = ShotDetection()
 
-    AllHardLabels = 0
-    AllGraLabels = 0
-    AllMissedHardLabels = 0
-    AllMissedGraLabels = 0
     for videonames, labels in annotations.items():
         #labelsnew = ['\t'.join([str(i[0]), str(i[1])+'\n']) for i in labels['transitions']]
         #with open('.'.join([str(videonames).split('.')[0]+'_gt','txt']), 'w') as f:
@@ -155,34 +265,32 @@ if __name__ == '__main__':
         GraLabels = []
 
         test1.SetVideo_path(str(videonames))
-        CandidateSegments = test1.CutVideoIntoSegments()
+        #CandidateSegments = test1.CutVideoIntoSegments()
         
+        CandidateHardLabels=[]
+
         for i in Labels:
             if i[1]-i[0] == 1:
                 HardLabels.append(i)
             else:
                 GraLabels.append(i)
     
+        CandidateHardLabels = [[math.floor(cut[0]/10.0), math.ceil(cut[1]/10.0)] for cut in HardLabels]
+        CandidateSegments = test1.CutVideoIntoSegments()
+        NewCandidateSegments = []
+        for i in CandidateHardLabels:
+            if i not in CandidateSegments:
+
+
+
         HardLabelsLength = float(len(HardLabels))
         GraLabelsLength = float(len(GraLabels))
 
         AllHardLabels += HardLabelsLength
         AllGraLabels += GraLabelsLength
 
-        MissedHardLabels = len(test1.CheckCandidateSegments(HardLabels, CandidateSegments))
-        MissedGraLabels = len(test1.CheckCandidateSegments(GraLabels, CandidateSegments))
 
-        AllMissedHardLabels += MissedHardLabels
-        AllMissedGraLabels += MissedGraLabels
-        
-        if HardLabelsLength>0:
-            print ' The rate of This video Candidate segments including true hard cut is', (HardLabelsLength-MissedHardLabels)/HardLabelsLength
-        if GraLabelsLength>0:
-            print ' The rate of This video Candidate segments including true Gra cut is', (GraLabelsLength-MissedGraLabels)/GraLabelsLength
-        
-    print 'All True Hard Cut is ', AllHardLabels
-    print 'All True Gra is', AllGraLabels
-    print 'All Missed Hard Cut is ', AllMissedHardLabels
-    print 'All Missed Gra Cut is ', AllMissedGraLabels
+
+        test1.CTDetectionBaseOnHist(CandidateHardLabels, HardLabels)
 
 
